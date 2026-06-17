@@ -1,0 +1,14 @@
+[
+  {
+    "video_path": "videos/clip1.mp4",
+    "title": "How to Make Perfect Coffee at Home",
+    "description": "A quick guide to brewing barista-quality coffee in your kitchen.",
+    "thumbnail_path": null
+  },
+  {
+    "video_path": "videos/clip2.mp4",
+    "title": "Morning Workout Routine for Beginners",
+    "description": "Simple 10 minute full body workout, no equipment needed.",
+    "tags": ["fitness", "workout", "beginner", "home workout"]
+  }
+]

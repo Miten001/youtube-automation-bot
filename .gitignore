@@ -1,0 +1,20 @@
+# Secrets & credentials
+.env
+client_secret*.json
+token.json
+*.credentials.json
+config.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+
+# Output / working files
+output/
+tmp/
+*.log

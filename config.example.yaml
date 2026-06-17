@@ -1,0 +1,63 @@
+# Default settings for the video upload pipeline.
+# Copy to config.yaml and adjust. Anything passed on the CLI overrides these.
+
+# Where enhanced/processed videos are written before upload.
+output_dir: output
+
+enhance:
+  enabled: true
+  # Target resolution height (e.g. 1080, 1440, 2160). null = keep original.
+  target_height: 1080
+  # Constant Rate Factor for libx264: lower = better quality/bigger file (18-23 is good).
+  crf: 20
+  # Encoding speed/efficiency tradeoff.
+  preset: slow
+  # Audio bitrate.
+  audio_bitrate: 192k
+  # Apply light denoise + sharpen + contrast filters.
+  apply_filters: true
+  # Video bitrate cap (null = CRF-only / no cap).
+  max_bitrate: null
+
+tags:
+  # Auto-generate tags from title + description + filename.
+  enabled: true
+  # Maximum number of tags to attach.
+  max_tags: 15
+  # Tags that always get added.
+  always_include:
+    - shorts
+  # Words to never use as tags.
+  stopwords_extra: []
+  # USA-targeted hashtags added to every video's tag list (to reach a US
+  # audience). Set to [] to disable, or swap in your own region/niche tags.
+  region_hashtags:
+    - usa
+    - america
+    - trendingusa
+    - viralusa
+    - fypusa
+
+title_hashtags:
+  # Append hashtags to the title, e.g. "My Video #usa #coffee #morning".
+  enabled: true
+  # Number of hashtags to append to the title.
+  count: 3
+
+auto_title:
+  # When no title is given, generate a catchy one automatically.
+  enabled: true
+  # catchy | question | clean
+  style: catchy
+  # Max length of the base title (hashtags are appended after this).
+  max_length: 70
+  # Prepend a relevant emoji.
+  emoji: true
+
+youtube:
+  enabled: true
+  # public | unlisted | private
+  privacy_status: private
+  # YouTube category ID. 22 = People & Blogs, 24 = Entertainment, 27 = Education.
+  category_id: "22"
+  made_for_kids: false
