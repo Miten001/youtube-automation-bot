@@ -226,15 +226,6 @@ class VideoEnhancerGUI:
         style.map('Custom.TButton',
                   background=[('active', '#1a5276')])
 
-        style.configure('Start.TButton',
-                        background='#00b894',
-                        foreground='#ffffff',
-                        font=('Helvetica', 14, 'bold'),
-                        padding=(30, 14))
-
-        style.map('Start.TButton',
-                  background=[('active', '#00a884')])
-
         style.configure('Cancel.TButton',
                         background='#e74c3c',
                         foreground='#ffffff',
@@ -404,20 +395,9 @@ class VideoEnhancerGUI:
                                     style='Info.TLabel')
         self.time_label.pack(side=tk.RIGHT)
 
-        # Buttons
+        # Cancel Button
         btn_frame = ttk.Frame(main_frame, style='Dark.TFrame')
         btn_frame.pack(fill=tk.X, pady=(20, 10))
-
-        self.start_btn = tk.Button(btn_frame, text="▶  Start Enhancement",
-                                   command=self._start_processing,
-                                   bg='#00b894', fg='#ffffff',
-                                   activebackground='#00a884',
-                                   activeforeground='#ffffff',
-                                   font=('Helvetica', 14, 'bold'),
-                                   relief='raised', bd=2,
-                                   cursor='hand2',
-                                   padx=30, pady=12)
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 15))
 
         self.cancel_btn = tk.Button(btn_frame, text="Cancel",
                                     command=self._cancel_processing,
@@ -430,11 +410,14 @@ class VideoEnhancerGUI:
                                     padx=15, pady=8)
         self.cancel_btn.pack(side=tk.LEFT)
 
-        # Credit Label
+        # Credit Label - at the very bottom, small font
         credit_label = tk.Label(main_frame, text="made by @codex_here",
                                 bg='#1a1a2e', fg='#00d4ff',
-                                font=('Helvetica', 10, 'italic'))
-        credit_label.pack(side=tk.BOTTOM, pady=(10, 0))
+                                font=('Helvetica', 8, 'italic'))
+        credit_label.pack(side=tk.BOTTOM, pady=(20, 0))
+
+        # Bind Enter key to start processing
+        self.root.bind('<Return>', lambda event: self._start_processing())
 
     def _browse_input(self):
         """Open file dialog for input video."""
@@ -495,6 +478,9 @@ class VideoEnhancerGUI:
 
     def _start_processing(self):
         """Start the enhancement process in a background thread."""
+        if self.processing:
+            return
+
         input_path = self.input_path.get().strip()
         output_path = self.output_path.get().strip()
 
@@ -516,7 +502,6 @@ class VideoEnhancerGUI:
             return
 
         self.processing = True
-        self.start_btn.config(state=tk.DISABLED)
         self.cancel_btn.config(state=tk.NORMAL)
         self.progress_bar['value'] = 0
         self.progress_label.config(text="Processing...")
@@ -560,7 +545,6 @@ class VideoEnhancerGUI:
     def _on_complete(self, success):
         """Called when processing completes."""
         self.processing = False
-        self.start_btn.config(state=tk.NORMAL)
         self.cancel_btn.config(state=tk.DISABLED)
 
         if success:
@@ -586,7 +570,6 @@ class VideoEnhancerGUI:
     def _on_error(self, error_msg):
         """Called when processing encounters an error."""
         self.processing = False
-        self.start_btn.config(state=tk.NORMAL)
         self.cancel_btn.config(state=tk.DISABLED)
         self.progress_label.config(text="Error occurred")
         self.progress_bar['value'] = 0
