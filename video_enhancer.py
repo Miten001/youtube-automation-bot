@@ -10,6 +10,8 @@ import threading
 import time
 import os
 import random
+import subprocess
+import tempfile
 import cv2
 import numpy as np
 
@@ -144,10 +146,51 @@ class VideoEnhancer:
 
         return result
 
+    def _get_ffmpeg_path(self):
+        """Get the path to the ffmpeg binary from imageio-ffmpeg."""
+        try:
+            from imageio_ffmpeg import get_ffmpeg_exe
+            return get_ffmpeg_exe()
+        except ImportError:
+            # Fallback: try system ffmpeg
+            return "ffmpeg"
+
+    def _has_audio_stream(self, input_path):
+        """Check if the input video has an audio stream."""
+        ffmpeg_path = self._get_ffmpeg_path()
+        try:
+            result = subprocess.run(
+                [ffmpeg_path, "-i", input_path],
+                capture_output=True, text=True, timeout=10
+            )
+            # ffmpeg prints info to stderr
+            return "Audio:" in result.stderr
+        except Exception:
+            return False
+
+    def _merge_audio(self, video_path, audio_source_path, output_path):
+        """Merge audio from audio_source into video_path, saving to output_path."""
+        ffmpeg_path = self._get_ffmpeg_path()
+        cmd = [
+            ffmpeg_path,
+            "-y",                      # Overwrite output
+            "-i", video_path,          # Enhanced video (no audio)
+            "-i", audio_source_path,   # Original video (audio source)
+            "-c:v", "copy",            # Copy video stream as-is
+            "-c:a", "aac",             # Encode audio as AAC
+            "-map", "0:v:0",           # Use video from first input
+            "-map", "1:a:0",           # Use audio from second input
+            "-shortest",               # End when shortest stream ends
+            output_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"Failed to merge audio: {result.stderr}")
+
     def process_video(self, input_path, output_path, hdr_enabled=True,
                       color_enabled=True, minor_zoom_enabled=False,
                       random_zoom_enabled=False, progress_callback=None):
-        """Process entire video file with enhancements."""
+        """Process entire video file with enhancements, preserving original audio."""
         self.cancel_flag = False
         # Reset random zoom state for each new video
         if hasattr(self, '_random_zoom_state'):
@@ -166,12 +209,21 @@ class VideoEnhancer:
         if total_frames <= 0:
             raise ValueError("Cannot determine video frame count")
 
-        # Setup writer - Use XVID codec with AVI container for Windows compatibility
+        # Check if original video has audio
+        has_audio = self._has_audio_stream(input_path)
+
+        # Write enhanced frames to a temp file first (OpenCV cannot copy audio)
+        temp_dir = os.path.dirname(output_path) or "."
+        temp_fd, temp_video_path = tempfile.mkstemp(suffix=".avi", dir=temp_dir)
+        os.close(temp_fd)
+
+        # Setup writer - Use XVID codec with AVI container for frame writing
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        out = cv2.VideoWriter(temp_video_path, fourcc, fps, (width, height))
 
         if not out.isOpened():
             cap.release()
+            os.remove(temp_video_path)
             raise ValueError("Cannot create output video file")
 
         start_time = time.time()
@@ -212,9 +264,30 @@ class VideoEnhancer:
 
         if self.cancel_flag:
             # Clean up partial output
+            if os.path.exists(temp_video_path):
+                os.remove(temp_video_path)
             if os.path.exists(output_path):
                 os.remove(output_path)
             return False
+
+        # Merge audio from original video into the enhanced video
+        if has_audio:
+            try:
+                self._merge_audio(temp_video_path, input_path, output_path)
+            except Exception as e:
+                # If audio merge fails, fall back to video-only output
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                os.rename(temp_video_path, output_path)
+                temp_video_path = None
+            finally:
+                if temp_video_path and os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+        else:
+            # No audio in original, just rename temp to output
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            os.rename(temp_video_path, output_path)
 
         # Final progress update
         if progress_callback:
@@ -522,20 +595,20 @@ class VideoEnhancerGUI:
             self.input_path.set(path)
             self._update_file_info(path)
 
-            # Auto-set output path (use .avi for Windows compatibility)
+            # Auto-set output path (use .mp4 for best audio/video compatibility)
             base, ext = os.path.splitext(path)
-            self.output_path.set(f"{base}_enhanced.avi")
+            self.output_path.set(f"{base}_enhanced.mp4")
 
     def _browse_output(self):
         """Open file dialog for output video."""
         filetypes = [
-            ("AVI Video", "*.avi"),
             ("MP4 Video", "*.mp4"),
+            ("AVI Video", "*.avi"),
             ("All Files", "*.*")
         ]
         path = filedialog.asksaveasfilename(title="Save Enhanced Video",
                                             filetypes=filetypes,
-                                            defaultextension=".avi")
+                                            defaultextension=".mp4")
         if path:
             self.output_path.set(path)
 
