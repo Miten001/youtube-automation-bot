@@ -29,8 +29,8 @@ class VideoEnhancer:
 
         # Tone mapping - expand dynamic range
         # Apply gamma correction for highlights and shadows separately
-        shadows = np.power(img, 0.6)  # Brighten shadows
-        highlights = np.power(img, 1.4)  # Control highlights
+        shadows = np.power(img, 0.5)  # Brighten shadows more aggressively
+        highlights = np.power(img, 1.3)  # Slightly less compression on highlights
 
         # Blend based on luminance
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -39,14 +39,20 @@ class VideoEnhancer:
         # HDR blend: shadows in dark areas, highlights in bright areas
         hdr_frame = shadows * (1 - gray_3ch) + highlights * gray_3ch
 
-        # Local contrast enhancement using CLAHE
+        # Apply overall brightness boost (gamma correction < 1 = brighter)
+        hdr_frame = np.power(hdr_frame, 0.85)
+
+        # Local contrast enhancement using CLAHE with stronger clip limit
         hdr_uint8 = np.clip(hdr_frame * 255, 0, 255).astype(np.uint8)
         lab = cv2.cvtColor(hdr_uint8, cv2.COLOR_BGR2LAB)
         l_channel, a_channel, b_channel = cv2.split(lab)
 
-        # Apply CLAHE to L channel for local contrast
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # Apply CLAHE to L channel for local contrast (stronger effect)
+        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
         l_enhanced = clahe.apply(l_channel)
+
+        # Additional brightness boost on L channel
+        l_enhanced = np.clip(l_enhanced.astype(np.float32) * 1.1, 0, 255).astype(np.uint8)
 
         lab_enhanced = cv2.merge([l_enhanced, a_channel, b_channel])
         hdr_result = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
@@ -55,16 +61,19 @@ class VideoEnhancer:
 
     def enhance_frame_color(self, frame):
         """Apply color enhancement to a single frame."""
-        # Convert to HSV for saturation boost
+        # Convert to HSV for saturation and brightness boost
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
 
-        # Boost saturation by 30%
-        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.3, 0, 255)
+        # Boost saturation by 45%
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.45, 0, 255)
 
-        # Slight vibrance increase (boost less saturated colors more)
+        # Stronger vibrance increase (boost less saturated colors more)
         saturation = hsv[:, :, 1] / 255.0
-        boost_factor = 1.0 + 0.3 * (1.0 - saturation)
+        boost_factor = 1.0 + 0.4 * (1.0 - saturation)
         hsv[:, :, 1] = np.clip(hsv[:, :, 1] * boost_factor, 0, 255)
+
+        # Brightness boost via Value channel
+        hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 1.12, 0, 255)
 
         hsv = hsv.astype(np.uint8)
         color_enhanced = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
