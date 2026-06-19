@@ -317,21 +317,6 @@ class VideoEnhancerGUI:
                              style='Status.TLabel')
         subtitle.pack(pady=(0, 15))
 
-        # Cancel Button - at the top
-        top_btn_frame = ttk.Frame(main_frame, style='Dark.TFrame')
-        top_btn_frame.pack(fill=tk.X, pady=(0, 10))
-
-        self.cancel_btn = tk.Button(top_btn_frame, text="Cancel",
-                                    command=self._cancel_processing,
-                                    bg='#e74c3c', fg='#ffffff',
-                                    activebackground='#c0392b',
-                                    activeforeground='#ffffff',
-                                    font=('Helvetica', 10, 'bold'),
-                                    relief='raised', bd=2,
-                                    state=tk.DISABLED,
-                                    padx=15, pady=8)
-        self.cancel_btn.pack(side=tk.LEFT)
-
         # Input File Section
         input_frame = ttk.Frame(main_frame, style='Card.TFrame')
         input_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
@@ -475,17 +460,39 @@ class VideoEnhancerGUI:
         ttk.Label(progress_frame, text="Progress:",
                   style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 5))
 
-        self.progress_bar = ttk.Progressbar(progress_frame,
+        # Progress bar row with Cancel and Enter buttons beside it
+        progress_bar_row = ttk.Frame(progress_frame, style='Card.TFrame')
+        progress_bar_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        self.progress_bar = ttk.Progressbar(progress_bar_row,
                                             style='Green.Horizontal.TProgressbar',
                                             mode='determinate',
                                             maximum=100)
-        self.progress_bar.pack(fill=tk.X, padx=10, pady=(0, 5))
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.cancel_btn = tk.Button(progress_bar_row, text="Cancel",
+                                    command=self._cancel_processing,
+                                    bg='#e74c3c', fg='#ffffff',
+                                    activebackground='#c0392b',
+                                    activeforeground='#ffffff',
+                                    font=('Helvetica', 10, 'bold'),
+                                    relief='raised', bd=2,
+                                    state=tk.DISABLED,
+                                    padx=10, pady=4)
+        self.cancel_btn.pack(side=tk.LEFT, padx=(10, 5))
+
+        enter_label = tk.Label(progress_bar_row, text="Enter",
+                               bg='#0f3460', fg='#00ff88',
+                               font=('Helvetica', 10, 'bold'),
+                               padx=10, pady=4,
+                               relief='raised', bd=2)
+        enter_label.pack(side=tk.LEFT, padx=(5, 0))
 
         progress_info = ttk.Frame(progress_frame, style='Card.TFrame')
         progress_info.pack(fill=tk.X, padx=10, pady=(0, 8))
 
         self.progress_label = ttk.Label(progress_info,
-                                        text="Ready",
+                                        text="Ready - Press Enter to Start",
                                         style='Info.TLabel')
         self.progress_label.pack(side=tk.LEFT)
 
