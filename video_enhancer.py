@@ -166,8 +166,8 @@ class VideoEnhancer:
         if total_frames <= 0:
             raise ValueError("Cannot determine video frame count")
 
-        # Setup writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Setup writer - Use XVID codec with AVI container for Windows compatibility
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
         if not out.isOpened():
@@ -522,20 +522,20 @@ class VideoEnhancerGUI:
             self.input_path.set(path)
             self._update_file_info(path)
 
-            # Auto-set output path
+            # Auto-set output path (use .avi for Windows compatibility)
             base, ext = os.path.splitext(path)
-            self.output_path.set(f"{base}_enhanced.mp4")
+            self.output_path.set(f"{base}_enhanced.avi")
 
     def _browse_output(self):
         """Open file dialog for output video."""
         filetypes = [
-            ("MP4 Video", "*.mp4"),
             ("AVI Video", "*.avi"),
+            ("MP4 Video", "*.mp4"),
             ("All Files", "*.*")
         ]
         path = filedialog.asksaveasfilename(title="Save Enhanced Video",
                                             filetypes=filetypes,
-                                            defaultextension=".mp4")
+                                            defaultextension=".avi")
         if path:
             self.output_path.set(path)
 
