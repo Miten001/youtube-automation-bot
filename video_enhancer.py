@@ -172,8 +172,9 @@ class VideoEnhancerGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Video Enhancer - Super HDR & Color Enhancement")
-        self.root.geometry("700x620")
-        self.root.resizable(False, False)
+        self.root.geometry("700x750")
+        self.root.resizable(True, True)
+        self.root.minsize(700, 750)
         self.root.configure(bg="#1a1a2e")
 
         self.enhancer = VideoEnhancer()
@@ -228,8 +229,8 @@ class VideoEnhancerGUI:
         style.configure('Start.TButton',
                         background='#00b894',
                         foreground='#ffffff',
-                        font=('Helvetica', 12, 'bold'),
-                        padding=(20, 10))
+                        font=('Helvetica', 14, 'bold'),
+                        padding=(30, 14))
 
         style.map('Start.TButton',
                   background=[('active', '#00a884')])
@@ -405,12 +406,12 @@ class VideoEnhancerGUI:
 
         # Buttons
         btn_frame = ttk.Frame(main_frame, style='Dark.TFrame')
-        btn_frame.pack(fill=tk.X, pady=(15, 0))
+        btn_frame.pack(fill=tk.X, pady=(20, 10))
 
         self.start_btn = ttk.Button(btn_frame, text="Start Enhancement",
                                     style='Start.TButton',
                                     command=self._start_processing)
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 15))
 
         self.cancel_btn = ttk.Button(btn_frame, text="Cancel",
                                      style='Cancel.TButton',
