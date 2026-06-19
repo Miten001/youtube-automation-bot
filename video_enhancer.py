@@ -9,6 +9,7 @@ from tkinter import ttk, filedialog, messagebox
 import threading
 import time
 import os
+import random
 import cv2
 import numpy as np
 
@@ -77,7 +78,55 @@ class VideoEnhancer:
 
         return result
 
-    def enhance_frame(self, frame, hdr_enabled=True, color_enabled=True):
+    def apply_minor_zoom(self, frame, zoom_factor=1.07):
+        """Apply a slight zoom-in effect by cropping from center and resizing back."""
+        h, w = frame.shape[:2]
+        # Calculate crop dimensions
+        new_w = int(w / zoom_factor)
+        new_h = int(h / zoom_factor)
+        x_start = (w - new_w) // 2
+        y_start = (h - new_h) // 2
+
+        cropped = frame[y_start:y_start + new_h, x_start:x_start + new_w]
+        zoomed = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+        return zoomed
+
+    def apply_random_zoom(self, frame, frame_index, fps):
+        """Apply random zoom in/out effect that changes every few seconds."""
+        if not hasattr(self, '_random_zoom_state'):
+            self._random_zoom_state = {
+                'current_factor': 1.0,
+                'next_change_frame': 0
+            }
+
+        state = self._random_zoom_state
+
+        # Check if it's time to pick a new random zoom level
+        if frame_index >= state['next_change_frame']:
+            # Random zoom factor between 1.0 and 1.08 (subtle effect)
+            state['current_factor'] = random.uniform(1.0, 1.08)
+            # Change again after a random interval (2-5 seconds)
+            interval_seconds = random.uniform(2.0, 5.0)
+            state['next_change_frame'] = frame_index + int(interval_seconds * fps)
+
+        zoom_factor = state['current_factor']
+
+        if zoom_factor <= 1.001:
+            return frame
+
+        h, w = frame.shape[:2]
+        new_w = int(w / zoom_factor)
+        new_h = int(h / zoom_factor)
+        x_start = (w - new_w) // 2
+        y_start = (h - new_h) // 2
+
+        cropped = frame[y_start:y_start + new_h, x_start:x_start + new_w]
+        zoomed = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+        return zoomed
+
+    def enhance_frame(self, frame, hdr_enabled=True, color_enabled=True,
+                      minor_zoom_enabled=False, random_zoom_enabled=False,
+                      frame_index=0, fps=30.0):
         """Apply all enabled enhancements to a frame."""
         result = frame.copy()
 
@@ -87,12 +136,22 @@ class VideoEnhancer:
         if color_enabled:
             result = self.enhance_frame_color(result)
 
+        if minor_zoom_enabled:
+            result = self.apply_minor_zoom(result)
+
+        if random_zoom_enabled:
+            result = self.apply_random_zoom(result, frame_index, fps)
+
         return result
 
     def process_video(self, input_path, output_path, hdr_enabled=True,
-                      color_enabled=True, progress_callback=None):
+                      color_enabled=True, minor_zoom_enabled=False,
+                      random_zoom_enabled=False, progress_callback=None):
         """Process entire video file with enhancements."""
         self.cancel_flag = False
+        # Reset random zoom state for each new video
+        if hasattr(self, '_random_zoom_state'):
+            del self._random_zoom_state
 
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
@@ -128,7 +187,9 @@ class VideoEnhancer:
                     break
 
                 # Enhance frame
-                enhanced = self.enhance_frame(frame, hdr_enabled, color_enabled)
+                enhanced = self.enhance_frame(frame, hdr_enabled, color_enabled,
+                                              minor_zoom_enabled, random_zoom_enabled,
+                                              frame_index=processed, fps=fps)
                 out.write(enhanced)
 
                 processed += 1
@@ -256,6 +317,21 @@ class VideoEnhancerGUI:
                              style='Status.TLabel')
         subtitle.pack(pady=(0, 15))
 
+        # Cancel Button - at the top
+        top_btn_frame = ttk.Frame(main_frame, style='Dark.TFrame')
+        top_btn_frame.pack(fill=tk.X, pady=(0, 10))
+
+        self.cancel_btn = tk.Button(top_btn_frame, text="Cancel",
+                                    command=self._cancel_processing,
+                                    bg='#e74c3c', fg='#ffffff',
+                                    activebackground='#c0392b',
+                                    activeforeground='#ffffff',
+                                    font=('Helvetica', 10, 'bold'),
+                                    relief='raised', bd=2,
+                                    state=tk.DISABLED,
+                                    padx=15, pady=8)
+        self.cancel_btn.pack(side=tk.LEFT)
+
         # Input File Section
         input_frame = ttk.Frame(main_frame, style='Card.TFrame')
         input_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
@@ -309,9 +385,11 @@ class VideoEnhancerGUI:
 
         self.hdr_var = tk.BooleanVar(value=True)
         self.color_var = tk.BooleanVar(value=True)
+        self.minor_zoom_var = tk.BooleanVar(value=False)
+        self.random_zoom_var = tk.BooleanVar(value=False)
 
         checks_row = ttk.Frame(options_frame, style='Card.TFrame')
-        checks_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        checks_row.pack(fill=tk.X, padx=10, pady=(0, 4))
 
         hdr_check = tk.Checkbutton(checks_row, text="Super HDR Enhancement",
                                    variable=self.hdr_var,
@@ -330,6 +408,27 @@ class VideoEnhancerGUI:
                                      activeforeground='#ffffff',
                                      font=('Helvetica', 10))
         color_check.pack(side=tk.LEFT)
+
+        checks_row2 = ttk.Frame(options_frame, style='Card.TFrame')
+        checks_row2.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        minor_zoom_check = tk.Checkbutton(checks_row2, text="Minor Zoom",
+                                          variable=self.minor_zoom_var,
+                                          bg='#16213e', fg='#ffffff',
+                                          selectcolor='#0f3460',
+                                          activebackground='#16213e',
+                                          activeforeground='#ffffff',
+                                          font=('Helvetica', 10))
+        minor_zoom_check.pack(side=tk.LEFT, padx=(0, 30))
+
+        random_zoom_check = tk.Checkbutton(checks_row2, text="Random Zoom In/Out",
+                                           variable=self.random_zoom_var,
+                                           bg='#16213e', fg='#ffffff',
+                                           selectcolor='#0f3460',
+                                           activebackground='#16213e',
+                                           activeforeground='#ffffff',
+                                           font=('Helvetica', 10))
+        random_zoom_check.pack(side=tk.LEFT)
 
         # Info Dashboard
         dashboard_frame = ttk.Frame(main_frame, style='Card.TFrame')
@@ -394,21 +493,6 @@ class VideoEnhancerGUI:
                                     text="Time Remaining: --:--",
                                     style='Info.TLabel')
         self.time_label.pack(side=tk.RIGHT)
-
-        # Cancel Button
-        btn_frame = ttk.Frame(main_frame, style='Dark.TFrame')
-        btn_frame.pack(fill=tk.X, pady=(20, 10))
-
-        self.cancel_btn = tk.Button(btn_frame, text="Cancel",
-                                    command=self._cancel_processing,
-                                    bg='#e74c3c', fg='#ffffff',
-                                    activebackground='#c0392b',
-                                    activeforeground='#ffffff',
-                                    font=('Helvetica', 10, 'bold'),
-                                    relief='raised', bd=2,
-                                    state=tk.DISABLED,
-                                    padx=15, pady=8)
-        self.cancel_btn.pack(side=tk.LEFT)
 
         # Credit Label - at the very bottom, small font
         credit_label = tk.Label(main_frame, text="made by @codex_here",
@@ -496,7 +580,8 @@ class VideoEnhancerGUI:
             messagebox.showerror("Error", "Please specify an output file path.")
             return
 
-        if not self.hdr_var.get() and not self.color_var.get():
+        if not self.hdr_var.get() and not self.color_var.get() \
+                and not self.minor_zoom_var.get() and not self.random_zoom_var.get():
             messagebox.showwarning("Warning",
                                    "Please enable at least one enhancement option.")
             return
@@ -519,6 +604,8 @@ class VideoEnhancerGUI:
                 input_path, output_path,
                 hdr_enabled=self.hdr_var.get(),
                 color_enabled=self.color_var.get(),
+                minor_zoom_enabled=self.minor_zoom_var.get(),
+                random_zoom_enabled=self.random_zoom_var.get(),
                 progress_callback=self._on_progress
             )
 
