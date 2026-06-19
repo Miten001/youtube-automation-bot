@@ -171,7 +171,7 @@ class VideoEnhancerGUI:
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Video Enhancer - Super HDR & Color Enhancement")
+        self.root.title("Video Enhancer - Super HDR & Color Enhancement | made by @codex_here")
         self.root.geometry("700x750")
         self.root.resizable(True, True)
         self.root.minsize(700, 750)
@@ -408,16 +408,33 @@ class VideoEnhancerGUI:
         btn_frame = ttk.Frame(main_frame, style='Dark.TFrame')
         btn_frame.pack(fill=tk.X, pady=(20, 10))
 
-        self.start_btn = ttk.Button(btn_frame, text="Start Enhancement",
-                                    style='Start.TButton',
-                                    command=self._start_processing)
+        self.start_btn = tk.Button(btn_frame, text="▶  Start Enhancement",
+                                   command=self._start_processing,
+                                   bg='#00b894', fg='#ffffff',
+                                   activebackground='#00a884',
+                                   activeforeground='#ffffff',
+                                   font=('Helvetica', 14, 'bold'),
+                                   relief='raised', bd=2,
+                                   cursor='hand2',
+                                   padx=30, pady=12)
         self.start_btn.pack(side=tk.LEFT, padx=(0, 15))
 
-        self.cancel_btn = ttk.Button(btn_frame, text="Cancel",
-                                     style='Cancel.TButton',
-                                     command=self._cancel_processing,
-                                     state=tk.DISABLED)
+        self.cancel_btn = tk.Button(btn_frame, text="Cancel",
+                                    command=self._cancel_processing,
+                                    bg='#e74c3c', fg='#ffffff',
+                                    activebackground='#c0392b',
+                                    activeforeground='#ffffff',
+                                    font=('Helvetica', 10, 'bold'),
+                                    relief='raised', bd=2,
+                                    state=tk.DISABLED,
+                                    padx=15, pady=8)
         self.cancel_btn.pack(side=tk.LEFT)
+
+        # Credit Label
+        credit_label = tk.Label(main_frame, text="made by @codex_here",
+                                bg='#1a1a2e', fg='#00d4ff',
+                                font=('Helvetica', 10, 'italic'))
+        credit_label.pack(side=tk.BOTTOM, pady=(10, 0))
 
     def _browse_input(self):
         """Open file dialog for input video."""
