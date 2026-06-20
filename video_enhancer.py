@@ -627,25 +627,28 @@ class VideoEnhancer:
                         pass
                     offset += duration
 
-            # Write SRT file
-            temp_srt_fd, temp_srt = tempfile.mkstemp(suffix=".srt", dir=temp_dir)
-            os.close(temp_srt_fd)
+            # Write SRT file to the same directory as the output video
+            # Using a simple filename avoids Windows path escaping issues
+            # with the ffmpeg subtitles filter (colons in C:\ break the filter)
+            output_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+            srt_filename = "temp_subtitles.srt"
+            temp_srt = os.path.join(output_dir, srt_filename)
             try:
                 with open(temp_srt, 'w', encoding='utf-8') as f:
                     f.write("\n".join(srt_entries))
 
-                # Burn subtitles into video
-                # Escape path for ffmpeg subtitles filter
-                srt_escaped = temp_srt.replace('\\', '/').replace(':', '\\:')
+                # Burn subtitles into video using cwd to avoid path issues
+                input_abs = os.path.abspath(input_path)
+                output_abs = os.path.abspath(output_path)
                 cmd = [
                     ffmpeg_path, "-y",
-                    "-i", input_path,
-                    "-vf", f"subtitles='{srt_escaped}'",
+                    "-i", input_abs,
+                    "-vf", f"subtitles={srt_filename}",
                     "-c:v", "libx264", "-preset", "fast",
                     "-c:a", "aac",
-                    output_path
+                    output_abs
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=output_dir)
                 if result.returncode != 0:
                     raise ValueError(f"Subtitle burn failed: {result.stderr}")
             finally:
