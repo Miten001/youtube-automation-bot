@@ -21,12 +21,24 @@ try:
 except ImportError:
     yt_dlp = None
 
+try:
+    import speech_recognition as sr
+except ImportError:
+    sr = None
+
 
 class VideoEnhancer:
     """Handles video enhancement processing with HDR and color enhancement."""
 
     def __init__(self):
         self.cancel_flag = False
+        # Cache the face cascade classifier for reuse across frames
+        self._face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        )
+        # Face detection frame-skip state
+        self._face_detect_frame_count = 0
+        self._face_detect_last_region = None
 
     def _get_skin_mask(self, frame):
         """Detect skin-tone regions in the frame using HSV color range."""
@@ -241,6 +253,8 @@ class VideoEnhancer:
     def enhance_frame(self, frame, hdr_enabled=True, color_enabled=True,
                       minor_zoom_enabled=False, random_zoom_enabled=False,
                       strong_zoom_enabled=False, copyright_free_enabled=False,
+                      cinematic_bars_enabled=False, face_zoom_enabled=False,
+                      color_preset="None",
                       frame_index=0, fps=30.0):
         """Apply all enabled enhancements to a frame."""
         result = frame.copy()
@@ -262,6 +276,15 @@ class VideoEnhancer:
 
         if copyright_free_enabled:
             result = self.apply_copyright_free_edit(result)
+
+        if face_zoom_enabled:
+            result = self.apply_face_detect_zoom(result)
+
+        if cinematic_bars_enabled:
+            result = self.apply_cinematic_bars(result)
+
+        if color_preset and color_preset != "None":
+            result = self.apply_color_preset(result, color_preset)
 
         return result
 
@@ -310,6 +333,8 @@ class VideoEnhancer:
                       color_enabled=True, minor_zoom_enabled=False,
                       random_zoom_enabled=False, strong_zoom_enabled=False,
                       copyright_free_enabled=False,
+                      cinematic_bars_enabled=False, face_zoom_enabled=False,
+                      color_preset="None",
                       progress_callback=None):
         """Process entire video file with enhancements, preserving original audio.
 
@@ -322,6 +347,9 @@ class VideoEnhancer:
             del self._random_zoom_state
         if hasattr(self, '_strong_zoom_state'):
             del self._strong_zoom_state
+        # Reset face detection frame-skip state
+        self._face_detect_frame_count = 0
+        self._face_detect_last_region = None
 
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
@@ -369,6 +397,8 @@ class VideoEnhancer:
                 enhanced = self.enhance_frame(frame, hdr_enabled, color_enabled,
                                               minor_zoom_enabled, random_zoom_enabled,
                                               strong_zoom_enabled, copyright_free_enabled,
+                                              cinematic_bars_enabled, face_zoom_enabled,
+                                              color_preset,
                                               frame_index=processed, fps=fps)
                 out.write(enhanced)
 
@@ -467,6 +497,377 @@ class VideoEnhancer:
         """Cancel the current processing."""
         self.cancel_flag = True
 
+    # ========== NEW FEATURE METHODS ==========
+
+    def apply_slow_motion(self, input_path, output_path):
+        """Apply 0.5x slow motion using ffmpeg setpts filter."""
+        ffmpeg_path = self._get_ffmpeg_path()
+        has_audio = self._has_audio_stream(input_path)
+        if has_audio:
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-filter_complex",
+                "[0:v]setpts=2.0*PTS[v];[0:a]atempo=0.5[a]",
+                "-map", "[v]", "-map", "[a]",
+                "-c:v", "libx264", "-preset", "fast",
+                "-c:a", "aac",
+                output_path
+            ]
+        else:
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-filter:v", "setpts=2.0*PTS",
+                "-an",
+                "-c:v", "libx264", "-preset", "fast",
+                output_path
+            ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"Slow motion failed: {result.stderr}")
+
+    def apply_voice_enhancement(self, input_path, output_path):
+        """Enhance voice clarity using ffmpeg audio filters."""
+        ffmpeg_path = self._get_ffmpeg_path()
+        audio_filter = "highpass=f=200,lowpass=f=3000,compand=attacks=0.3:decays=0.8:points=-80/-80|-45/-45|-27/-25|0/-10|20/-7,volume=1.5"
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", input_path,
+            "-af", audio_filter,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            output_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"Voice enhancement failed: {result.stderr}")
+
+    def apply_remove_background_noise(self, input_path, output_path):
+        """Remove background noise using ffmpeg afftdn filter."""
+        ffmpeg_path = self._get_ffmpeg_path()
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", input_path,
+            "-af", "afftdn=nf=-25",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            output_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"Remove background noise failed: {result.stderr}")
+
+    def apply_voice_enhance_and_denoise(self, input_path, output_path):
+        """Apply voice enhancement and noise removal in a single ffmpeg pass."""
+        ffmpeg_path = self._get_ffmpeg_path()
+        # Combine noise removal (afftdn) with voice enhancement filters in one chain
+        audio_filter = (
+            "afftdn=nf=-25,"
+            "highpass=f=200,lowpass=f=3000,"
+            "compand=attacks=0.3:decays=0.8:points=-80/-80|-45/-45|-27/-25|0/-10|20/-7,"
+            "volume=1.5"
+        )
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", input_path,
+            "-af", audio_filter,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            output_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"Voice enhancement + noise removal failed: {result.stderr}")
+
+    def apply_auto_subtitles(self, input_path, output_path):
+        """Extract audio, perform speech-to-text, generate SRT, burn subtitles."""
+        if sr is None:
+            raise ValueError("speech_recognition is not installed. Run: pip install SpeechRecognition")
+
+        ffmpeg_path = self._get_ffmpeg_path()
+        temp_dir = os.path.dirname(output_path) or "."
+
+        # Extract audio to WAV
+        temp_audio_fd, temp_audio = tempfile.mkstemp(suffix=".wav", dir=temp_dir)
+        os.close(temp_audio_fd)
+        try:
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-vn", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1",
+                temp_audio
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                raise ValueError(f"Audio extraction failed: {result.stderr}")
+
+            # Speech-to-text using speech_recognition
+            recognizer = sr.Recognizer()
+            srt_entries = []
+            chunk_duration = 5  # seconds per chunk
+
+            with sr.AudioFile(temp_audio) as source:
+                audio_duration = source.DURATION
+                idx = 1
+                offset = 0.0
+                while offset < audio_duration:
+                    duration = min(chunk_duration, audio_duration - offset)
+                    audio_data = recognizer.record(source, duration=duration)
+                    try:
+                        text = recognizer.recognize_google(audio_data)
+                        start_t = offset
+                        end_t = offset + duration
+                        start_str = self._srt_time(start_t)
+                        end_str = self._srt_time(end_t)
+                        srt_entries.append(f"{idx}\n{start_str} --> {end_str}\n{text}\n")
+                        idx += 1
+                    except (sr.UnknownValueError, sr.RequestError):
+                        pass
+                    offset += duration
+
+            # Write SRT file
+            temp_srt_fd, temp_srt = tempfile.mkstemp(suffix=".srt", dir=temp_dir)
+            os.close(temp_srt_fd)
+            try:
+                with open(temp_srt, 'w', encoding='utf-8') as f:
+                    f.write("\n".join(srt_entries))
+
+                # Burn subtitles into video
+                # Escape path for ffmpeg subtitles filter
+                srt_escaped = temp_srt.replace('\\', '/').replace(':', '\\:')
+                cmd = [
+                    ffmpeg_path, "-y",
+                    "-i", input_path,
+                    "-vf", f"subtitles='{srt_escaped}'",
+                    "-c:v", "libx264", "-preset", "fast",
+                    "-c:a", "aac",
+                    output_path
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if result.returncode != 0:
+                    raise ValueError(f"Subtitle burn failed: {result.stderr}")
+            finally:
+                if os.path.exists(temp_srt):
+                    os.remove(temp_srt)
+        finally:
+            if os.path.exists(temp_audio):
+                os.remove(temp_audio)
+
+    def _srt_time(self, seconds):
+        """Convert seconds to SRT timestamp format HH:MM:SS,mmm."""
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    def generate_thumbnail(self, input_path, output_jpg_path):
+        """Scan video frames, find sharpest frame via Laplacian variance, save as JPG."""
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            raise ValueError("Cannot open video file for thumbnail generation")
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # Sample every N frames (at least every 30 frames)
+        sample_interval = max(1, total_frames // 100)
+        best_score = -1
+        best_frame = None
+
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_idx % sample_interval == 0:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                score = cv2.Laplacian(gray, cv2.CV_64F).var()
+                if score > best_score:
+                    best_score = score
+                    best_frame = frame.copy()
+            frame_idx += 1
+
+        cap.release()
+
+        if best_frame is not None:
+            cv2.imwrite(output_jpg_path, best_frame)
+        else:
+            raise ValueError("Could not find a suitable frame for thumbnail")
+
+    def apply_video_trim(self, input_path, output_path, start_time, end_time):
+        """Trim video using ffmpeg -ss and -to parameters."""
+        ffmpeg_path = self._get_ffmpeg_path()
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", input_path,
+            "-ss", start_time,
+            "-to", end_time,
+            "-c:v", "libx264", "-preset", "fast",
+            "-c:a", "aac",
+            output_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"Video trim failed: {result.stderr}")
+
+    def apply_face_detect_zoom(self, frame):
+        """Detect face and auto-zoom/crop to face region.
+
+        Uses frame-skip to only run detection every 5 frames, holding the
+        last detected crop region between detections for performance.
+        """
+        self._face_detect_frame_count += 1
+
+        # Only run detection every 5 frames; reuse last region otherwise
+        if self._face_detect_frame_count % 5 == 1 or self._face_detect_last_region is None:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self._face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+
+            if len(faces) > 0:
+                # Use the largest face
+                areas = [w * h for (x, y, w, h) in faces]
+                largest_idx = areas.index(max(areas))
+                x, y, w, h = faces[largest_idx]
+
+                frame_h, frame_w = frame.shape[:2]
+                # Expand the face region to include more context
+                cx, cy = x + w // 2, y + h // 2
+                zoom_size = max(w, h) * 2
+                x1 = max(0, cx - zoom_size // 2)
+                y1 = max(0, cy - zoom_size // 2)
+                x2 = min(frame_w, cx + zoom_size // 2)
+                y2 = min(frame_h, cy + zoom_size // 2)
+
+                self._face_detect_last_region = (x1, y1, x2, y2)
+            else:
+                # No face found; clear the cached region
+                self._face_detect_last_region = None
+
+        # Apply the cached crop region if available
+        if self._face_detect_last_region is not None:
+            x1, y1, x2, y2 = self._face_detect_last_region
+            frame_h, frame_w = frame.shape[:2]
+            cropped = frame[y1:y2, x1:x2]
+            if cropped.size > 0:
+                result = cv2.resize(cropped, (frame_w, frame_h), interpolation=cv2.INTER_LINEAR)
+                return result
+
+        return frame
+
+    def apply_preset_profile(self, input_path, output_path, preset):
+        """Apply a preset profile: YouTube, Instagram, or Cinematic."""
+        ffmpeg_path = self._get_ffmpeg_path()
+
+        if preset == "YouTube":
+            # 1080p + copy audio
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                "-c:v", "libx264", "-preset", "fast",
+                "-c:a", "aac",
+                output_path
+            ]
+        elif preset == "Instagram":
+            # 1080x1080 center crop
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-vf", "crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080",
+                "-c:v", "libx264", "-preset", "fast",
+                "-c:a", "aac",
+                output_path
+            ]
+        elif preset == "Cinematic":
+            # Letterbox bars + color grading (warm tone)
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", input_path,
+                "-vf", "pad=iw:iw*9/16:(ow-iw)/2:(oh-ih)/2:black,colorbalance=rs=0.1:gs=0.05:bs=-0.1",
+                "-c:v", "libx264", "-preset", "fast",
+                "-c:a", "aac",
+                output_path
+            ]
+        else:
+            # No preset, just copy
+            cmd = [ffmpeg_path, "-y", "-i", input_path, "-c", "copy", output_path]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise ValueError(f"Preset profile '{preset}' failed: {result.stderr}")
+
+    def apply_cinematic_bars(self, frame):
+        """Add black letterbox bars (top and bottom, ~12% each) to create cinematic look."""
+        h, w = frame.shape[:2]
+        bar_height = int(h * 0.12)
+        result = frame.copy()
+        # Top bar
+        result[0:bar_height, :] = 0
+        # Bottom bar
+        result[h - bar_height:h, :] = 0
+        return result
+
+    def apply_color_preset(self, frame, preset):
+        """Apply color preset transformation per frame."""
+        if preset == "Warm":
+            # Increase red/yellow, decrease blue
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 0] = np.clip(hsv[:, :, 0] - 5, 0, 179)  # Shift hue toward warm
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.1, 0, 255)  # Boost saturation
+            hsv = hsv.astype(np.uint8)
+            result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            # Add warmth via color balance
+            result[:, :, 2] = np.clip(result[:, :, 2].astype(np.float32) * 1.1, 0, 255).astype(np.uint8)  # Red up
+            result[:, :, 0] = np.clip(result[:, :, 0].astype(np.float32) * 0.9, 0, 255).astype(np.uint8)  # Blue down
+            return result
+
+        elif preset == "Cool":
+            # Increase blue tones, decrease warm
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 0] = np.clip(hsv[:, :, 0] + 10, 0, 179)  # Shift hue toward cool
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.05, 0, 255)
+            hsv = hsv.astype(np.uint8)
+            result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            result[:, :, 0] = np.clip(result[:, :, 0].astype(np.float32) * 1.15, 0, 255).astype(np.uint8)  # Blue up
+            result[:, :, 2] = np.clip(result[:, :, 2].astype(np.float32) * 0.9, 0, 255).astype(np.uint8)  # Red down
+            return result
+
+        elif preset == "Vintage":
+            # Desaturate slightly, add warm yellow tint, reduce contrast
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 0.7, 0, 255)  # Reduce saturation
+            hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 0.9, 0, 255)  # Slightly darker
+            hsv = hsv.astype(np.uint8)
+            result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            # Add sepia-like warm tint
+            result[:, :, 2] = np.clip(result[:, :, 2].astype(np.float32) + 20, 0, 255).astype(np.uint8)
+            result[:, :, 1] = np.clip(result[:, :, 1].astype(np.float32) + 10, 0, 255).astype(np.uint8)
+            return result
+
+        elif preset == "Moody Dark":
+            # Dark, desaturated, high contrast with cool shadows
+            result = cv2.convertScaleAbs(frame, alpha=1.2, beta=-30)
+            hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 0.8, 0, 255)
+            hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 0.85, 0, 255)
+            hsv = hsv.astype(np.uint8)
+            result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            # Cool shadow tint
+            result[:, :, 0] = np.clip(result[:, :, 0].astype(np.float32) + 10, 0, 255).astype(np.uint8)
+            return result
+
+        elif preset == "Bright Pop":
+            # High saturation, bright, vibrant
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.4, 0, 255)  # Boost saturation
+            hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 1.15, 0, 255)  # Brighten
+            hsv = hsv.astype(np.uint8)
+            result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            return result
+
+        return frame
+
 
 class VideoEnhancerGUI:
     """GUI Dashboard for the Video Enhancer."""
@@ -486,6 +887,19 @@ class VideoEnhancerGUI:
         self.yt_format = tk.StringVar(value="16:9")
         self.processing = False
         self.downloading = False
+
+        # New feature variables
+        self.slow_motion_var = tk.BooleanVar(value=False)
+        self.voice_enhance_var = tk.BooleanVar(value=False)
+        self.remove_noise_var = tk.BooleanVar(value=False)
+        self.auto_subtitles_var = tk.BooleanVar(value=False)
+        self.thumbnail_var = tk.BooleanVar(value=False)
+        self.cinematic_bars_var = tk.BooleanVar(value=False)
+        self.face_zoom_var = tk.BooleanVar(value=False)
+        self.preset_profile_var = tk.StringVar(value="None")
+        self.color_preset_var = tk.StringVar(value="None")
+        self.trim_start_var = tk.StringVar(value="")
+        self.trim_end_var = tk.StringVar(value="")
 
         self._setup_styles()
         self._create_widgets()
@@ -729,6 +1143,133 @@ class VideoEnhancerGUI:
                                               activeforeground='#ffffff',
                                               font=('Helvetica', 9))
         copyright_free_check.pack(side=tk.LEFT)
+
+        # Row 3: Audio Features - Slow Motion, Voice Enhance, Remove Noise
+        checks_row3 = ttk.Frame(options_frame, style='Card.TFrame')
+        checks_row3.pack(fill=tk.X, padx=8, pady=(0, 1))
+
+        slow_motion_check = tk.Checkbutton(checks_row3, text="Slow Motion",
+                                           variable=self.slow_motion_var,
+                                           bg='#16213e', fg='#ffffff',
+                                           selectcolor='#0f3460',
+                                           activebackground='#16213e',
+                                           activeforeground='#ffffff',
+                                           font=('Helvetica', 9))
+        slow_motion_check.pack(side=tk.LEFT, padx=(0, 20))
+
+        voice_enhance_check = tk.Checkbutton(checks_row3, text="Voice Enhance",
+                                             variable=self.voice_enhance_var,
+                                             bg='#16213e', fg='#ffffff',
+                                             selectcolor='#0f3460',
+                                             activebackground='#16213e',
+                                             activeforeground='#ffffff',
+                                             font=('Helvetica', 9))
+        voice_enhance_check.pack(side=tk.LEFT, padx=(0, 20))
+
+        remove_noise_check = tk.Checkbutton(checks_row3, text="Remove Noise",
+                                            variable=self.remove_noise_var,
+                                            bg='#16213e', fg='#ffffff',
+                                            selectcolor='#0f3460',
+                                            activebackground='#16213e',
+                                            activeforeground='#ffffff',
+                                            font=('Helvetica', 9))
+        remove_noise_check.pack(side=tk.LEFT)
+
+        # Row 4: Cinematic Bars, Face Zoom, Auto Subtitles, Thumbnail
+        checks_row4 = ttk.Frame(options_frame, style='Card.TFrame')
+        checks_row4.pack(fill=tk.X, padx=8, pady=(0, 1))
+
+        cinematic_bars_check = tk.Checkbutton(checks_row4, text="Cinematic Bars",
+                                              variable=self.cinematic_bars_var,
+                                              bg='#16213e', fg='#ffffff',
+                                              selectcolor='#0f3460',
+                                              activebackground='#16213e',
+                                              activeforeground='#ffffff',
+                                              font=('Helvetica', 9))
+        cinematic_bars_check.pack(side=tk.LEFT, padx=(0, 20))
+
+        face_zoom_check = tk.Checkbutton(checks_row4, text="Face Zoom",
+                                         variable=self.face_zoom_var,
+                                         bg='#16213e', fg='#ffffff',
+                                         selectcolor='#0f3460',
+                                         activebackground='#16213e',
+                                         activeforeground='#ffffff',
+                                         font=('Helvetica', 9))
+        face_zoom_check.pack(side=tk.LEFT, padx=(0, 20))
+
+        auto_subtitles_check = tk.Checkbutton(checks_row4, text="Auto Subtitles",
+                                              variable=self.auto_subtitles_var,
+                                              bg='#16213e', fg='#ffffff',
+                                              selectcolor='#0f3460',
+                                              activebackground='#16213e',
+                                              activeforeground='#ffffff',
+                                              font=('Helvetica', 9))
+        auto_subtitles_check.pack(side=tk.LEFT, padx=(0, 20))
+
+        thumbnail_check = tk.Checkbutton(checks_row4, text="Thumbnail",
+                                         variable=self.thumbnail_var,
+                                         bg='#16213e', fg='#ffffff',
+                                         selectcolor='#0f3460',
+                                         activebackground='#16213e',
+                                         activeforeground='#ffffff',
+                                         font=('Helvetica', 9))
+        thumbnail_check.pack(side=tk.LEFT)
+
+        # Row 5: Preset Profiles and Color Presets dropdowns
+        presets_row = ttk.Frame(options_frame, style='Card.TFrame')
+        presets_row.pack(fill=tk.X, padx=8, pady=(0, 1))
+
+        tk.Label(presets_row, text="Preset:", bg='#16213e', fg='#ffffff',
+                 font=('Helvetica', 9)).pack(side=tk.LEFT, padx=(0, 4))
+
+        preset_menu = ttk.Combobox(presets_row, textvariable=self.preset_profile_var,
+                                   values=["None", "YouTube", "Instagram", "Cinematic"],
+                                   state="readonly", width=12,
+                                   font=('Helvetica', 9))
+        preset_menu.pack(side=tk.LEFT, padx=(0, 20))
+
+        tk.Label(presets_row, text="Color:", bg='#16213e', fg='#ffffff',
+                 font=('Helvetica', 9)).pack(side=tk.LEFT, padx=(0, 4))
+
+        color_menu = ttk.Combobox(presets_row, textvariable=self.color_preset_var,
+                                  values=["None", "Warm", "Cool", "Vintage", "Moody Dark", "Bright Pop"],
+                                  state="readonly", width=12,
+                                  font=('Helvetica', 9))
+        color_menu.pack(side=tk.LEFT)
+
+        # Row 6: Video Trim controls
+        trim_row = ttk.Frame(options_frame, style='Card.TFrame')
+        trim_row.pack(fill=tk.X, padx=8, pady=(0, 4))
+
+        tk.Label(trim_row, text="Start:", bg='#16213e', fg='#ffffff',
+                 font=('Helvetica', 9)).pack(side=tk.LEFT, padx=(0, 4))
+
+        self.trim_start_entry = tk.Entry(trim_row, textvariable=self.trim_start_var,
+                                         font=('Helvetica', 9), width=10,
+                                         bg='#0f3460', fg='#ffffff',
+                                         insertbackground='#ffffff', relief='flat')
+        self.trim_start_entry.pack(side=tk.LEFT, padx=(0, 10), ipady=1)
+        self.trim_start_entry.insert(0, "00:00:00")
+
+        tk.Label(trim_row, text="End:", bg='#16213e', fg='#ffffff',
+                 font=('Helvetica', 9)).pack(side=tk.LEFT, padx=(0, 4))
+
+        self.trim_end_entry = tk.Entry(trim_row, textvariable=self.trim_end_var,
+                                       font=('Helvetica', 9), width=10,
+                                       bg='#0f3460', fg='#ffffff',
+                                       insertbackground='#ffffff', relief='flat')
+        self.trim_end_entry.pack(side=tk.LEFT, padx=(0, 10), ipady=1)
+        self.trim_end_entry.insert(0, "00:00:00")
+
+        self.trim_btn = tk.Button(trim_row, text="Trim",
+                                  command=self._trim_video,
+                                  bg='#0f3460', fg='#ffffff',
+                                  activebackground='#1a5276',
+                                  activeforeground='#ffffff',
+                                  font=('Helvetica', 9, 'bold'),
+                                  relief='raised', bd=2,
+                                  padx=8, pady=1)
+        self.trim_btn.pack(side=tk.LEFT)
 
         # Info Dashboard (single compact row)
         dashboard_frame = ttk.Frame(main_frame, style='Card.TFrame')
@@ -1017,7 +1558,13 @@ class VideoEnhancerGUI:
 
         if not self.hdr_var.get() and not self.color_var.get() \
                 and not self.minor_zoom_var.get() and not self.random_zoom_var.get() \
-                and not self.strong_zoom_var.get() and not self.copyright_free_var.get():
+                and not self.strong_zoom_var.get() and not self.copyright_free_var.get() \
+                and not self.slow_motion_var.get() and not self.voice_enhance_var.get() \
+                and not self.remove_noise_var.get() and not self.auto_subtitles_var.get() \
+                and not self.thumbnail_var.get() and not self.cinematic_bars_var.get() \
+                and not self.face_zoom_var.get() \
+                and self.preset_profile_var.get() == "None" \
+                and self.color_preset_var.get() == "None":
             messagebox.showwarning("Warning",
                                    "Please enable at least one enhancement option.")
             return
@@ -1044,10 +1591,65 @@ class VideoEnhancerGUI:
                 random_zoom_enabled=self.random_zoom_var.get(),
                 strong_zoom_enabled=self.strong_zoom_var.get(),
                 copyright_free_enabled=self.copyright_free_var.get(),
+                cinematic_bars_enabled=self.cinematic_bars_var.get(),
+                face_zoom_enabled=self.face_zoom_var.get(),
+                color_preset=self.color_preset_var.get(),
                 progress_callback=self._on_progress
             )
 
-            self.root.after(0, self._on_complete, success)
+            if not success:
+                self.root.after(0, self._on_complete, False)
+                return
+
+            # Apply post-processing ffmpeg-based features
+            current_output = output_path
+
+            # Slow Motion
+            if self.slow_motion_var.get():
+                temp_path = output_path + ".slow.mp4"
+                self.enhancer.apply_slow_motion(current_output, temp_path)
+                os.replace(temp_path, current_output)
+
+            # Voice Enhancement + Noise Removal (combined into one pass when both enabled)
+            if self.voice_enhance_var.get() and self.remove_noise_var.get():
+                temp_path = output_path + ".audio.mp4"
+                self.enhancer.apply_voice_enhance_and_denoise(current_output, temp_path)
+                os.replace(temp_path, current_output)
+            elif self.voice_enhance_var.get():
+                temp_path = output_path + ".voice.mp4"
+                self.enhancer.apply_voice_enhancement(current_output, temp_path)
+                os.replace(temp_path, current_output)
+            elif self.remove_noise_var.get():
+                temp_path = output_path + ".denoise.mp4"
+                self.enhancer.apply_remove_background_noise(current_output, temp_path)
+                os.replace(temp_path, current_output)
+
+            # Auto Subtitles
+            if self.auto_subtitles_var.get():
+                temp_path = output_path + ".subs.mp4"
+                try:
+                    self.enhancer.apply_auto_subtitles(current_output, temp_path)
+                    os.replace(temp_path, current_output)
+                except ValueError as e:
+                    self.root.after(0, lambda msg=str(e): messagebox.showwarning(
+                        "Auto Subtitles", msg))
+
+            # Preset Profile (applied via ffmpeg after frame processing)
+            preset = self.preset_profile_var.get()
+            if preset and preset != "None":
+                temp_path = output_path + ".preset.mp4"
+                self.enhancer.apply_preset_profile(current_output, temp_path, preset)
+                os.replace(temp_path, current_output)
+
+            # Thumbnail Generator
+            if self.thumbnail_var.get():
+                thumb_path = os.path.splitext(output_path)[0] + "_thumbnail.jpg"
+                try:
+                    self.enhancer.generate_thumbnail(input_path, thumb_path)
+                except ValueError:
+                    pass
+
+            self.root.after(0, self._on_complete, True)
 
         except Exception as e:
             self.root.after(0, self._on_error, str(e))
@@ -1099,6 +1701,74 @@ class VideoEnhancerGUI:
         self.progress_label.config(text="Error occurred")
         self.progress_bar['value'] = 0
         messagebox.showerror("Error", f"Processing failed:\n{error_msg}")
+
+    def _validate_time_format(self, time_str):
+        """Validate that a time string is in HH:MM:SS format."""
+        import re
+        pattern = r'^\d{2}:\d{2}:\d{2}$'
+        if not re.match(pattern, time_str):
+            return False
+        parts = time_str.split(':')
+        hours, minutes, seconds = int(parts[0]), int(parts[1]), int(parts[2])
+        if minutes >= 60 or seconds >= 60:
+            return False
+        return True
+
+    def _trim_video(self):
+        """Trim the input video using start and end time."""
+        if self.processing:
+            return
+
+        input_path = self.input_path.get().strip()
+        if not input_path or not os.path.exists(input_path):
+            messagebox.showerror("Error", "Please select a valid input video file.")
+            return
+
+        start_time = self.trim_start_var.get().strip()
+        end_time = self.trim_end_var.get().strip()
+
+        if not start_time or not end_time:
+            messagebox.showerror("Error", "Please enter Start and End times (HH:MM:SS).")
+            return
+
+        if start_time == "00:00:00" and end_time == "00:00:00":
+            messagebox.showerror("Error", "Please set valid Start and End times.")
+            return
+
+        # Validate HH:MM:SS format
+        if not self._validate_time_format(start_time):
+            messagebox.showerror("Error",
+                                 f"Invalid start time format: '{start_time}'.\n"
+                                 "Please use HH:MM:SS format (e.g., 00:01:30).")
+            return
+
+        if not self._validate_time_format(end_time):
+            messagebox.showerror("Error",
+                                 f"Invalid end time format: '{end_time}'.\n"
+                                 "Please use HH:MM:SS format (e.g., 00:05:00).")
+            return
+
+        base, ext = os.path.splitext(input_path)
+        output_path = f"{base}_trimmed.mp4"
+
+        self.processing = True
+        self.progress_label.config(text="Trimming video...")
+
+        def _trim_thread():
+            try:
+                self.enhancer.apply_video_trim(input_path, output_path, start_time, end_time)
+                self.root.after(0, lambda: self._on_trim_complete(output_path))
+            except Exception as e:
+                self.root.after(0, self._on_error, str(e))
+
+        thread = threading.Thread(target=_trim_thread, daemon=True)
+        thread.start()
+
+    def _on_trim_complete(self, output_path):
+        """Called when trimming completes."""
+        self.processing = False
+        self.progress_label.config(text="Trim Complete!")
+        messagebox.showinfo("Success", f"Video trimmed:\n{output_path}")
 
     def _cancel_processing(self):
         """Cancel the current processing."""
