@@ -554,7 +554,8 @@ class VideoEnhancerGUI:
         self.canvas = tk.Canvas(container, bg='#1a1a2e', highlightthickness=0)
         scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL,
                                   command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.configure(yscrollcommand=scrollbar.set,
+                              yscrollincrement=20)
 
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -576,17 +577,31 @@ class VideoEnhancerGUI:
 
         # Mousewheel scrolling
         def _on_mousewheel(event):
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            # On Windows, event.delta is typically 120 or -120
+            if event.delta > 0:
+                self.canvas.yview_scroll(-3, "units")
+            else:
+                self.canvas.yview_scroll(3, "units")
 
         def _on_mousewheel_linux(event):
             if event.num == 4:
-                self.canvas.yview_scroll(-1, "units")
+                self.canvas.yview_scroll(-3, "units")
             elif event.num == 5:
-                self.canvas.yview_scroll(1, "units")
+                self.canvas.yview_scroll(3, "units")
 
-        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        self.canvas.bind_all("<Button-4>", _on_mousewheel_linux)
-        self.canvas.bind_all("<Button-5>", _on_mousewheel_linux)
+        # Bind mousewheel only when mouse is over the canvas area
+        def _bind_mousewheel(event):
+            self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            self.canvas.bind_all("<Button-4>", _on_mousewheel_linux)
+            self.canvas.bind_all("<Button-5>", _on_mousewheel_linux)
+
+        def _unbind_mousewheel(event):
+            self.canvas.unbind_all("<MouseWheel>")
+            self.canvas.unbind_all("<Button-4>")
+            self.canvas.unbind_all("<Button-5>")
+
+        self.canvas.bind("<Enter>", _bind_mousewheel)
+        self.canvas.bind("<Leave>", _unbind_mousewheel)
 
         # Title
         title_label = ttk.Label(main_frame,
@@ -865,6 +880,10 @@ class VideoEnhancerGUI:
                                 bg='#1a1a2e', fg='#00d4ff',
                                 font=('Helvetica', 8, 'italic'))
         credit_label.pack(side=tk.BOTTOM, pady=(10, 10))
+
+        # Ensure scroll region is set after all widgets are created
+        self.root.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
         # Bind Enter key to start processing
         self.root.bind('<Return>', lambda event: self._start_processing())
