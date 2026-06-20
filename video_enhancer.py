@@ -2,6 +2,7 @@
 """
 Video Enhancer - HDR/Super HDR + Color Enhancement
 Full GUI Dashboard with progress, time estimation, and file size display.
+Includes YouTube video download and copyright-free edit features.
 """
 
 import tkinter as tk
@@ -14,6 +15,11 @@ import subprocess
 import tempfile
 import cv2
 import numpy as np
+
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
 
 
 class VideoEnhancer:
@@ -197,9 +203,44 @@ class VideoEnhancer:
         zoomed = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
         return zoomed
 
+    def apply_copyright_free_edit(self, frame):
+        """Apply subtle transformations to make video look different from original.
+
+        Applies: horizontal flip, slight crop, minor hue shift,
+        subtle brightness/contrast variation, and grain overlay.
+        """
+        h, w = frame.shape[:2]
+
+        # 1. Horizontal flip (mirror)
+        result = cv2.flip(frame, 1)
+
+        # 2. Slight crop from edges (2-3% crop)
+        crop_pct = 0.025
+        x_crop = int(w * crop_pct)
+        y_crop = int(h * crop_pct)
+        result = result[y_crop:h - y_crop, x_crop:w - x_crop]
+        result = cv2.resize(result, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        # 3. Minor color hue shift (5-10 degrees)
+        hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 0] = (hsv[:, :, 0] + 7) % 180  # Shift hue by ~7 degrees
+        hsv = np.clip(hsv, 0, 255).astype(np.uint8)
+        result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+        # 4. Slight brightness/contrast variation
+        alpha = 1.03  # Slight contrast increase
+        beta = 3      # Slight brightness increase
+        result = cv2.convertScaleAbs(result, alpha=alpha, beta=beta)
+
+        # 5. Add very subtle grain/noise overlay
+        noise = np.random.normal(0, 3, result.shape).astype(np.float32)
+        result = np.clip(result.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+        return result
+
     def enhance_frame(self, frame, hdr_enabled=True, color_enabled=True,
                       minor_zoom_enabled=False, random_zoom_enabled=False,
-                      strong_zoom_enabled=False,
+                      strong_zoom_enabled=False, copyright_free_enabled=False,
                       frame_index=0, fps=30.0):
         """Apply all enabled enhancements to a frame."""
         result = frame.copy()
@@ -218,6 +259,9 @@ class VideoEnhancer:
 
         if strong_zoom_enabled:
             result = self.apply_strong_zoom(result, frame_index, fps)
+
+        if copyright_free_enabled:
+            result = self.apply_copyright_free_edit(result)
 
         return result
 
@@ -265,8 +309,13 @@ class VideoEnhancer:
     def process_video(self, input_path, output_path, hdr_enabled=True,
                       color_enabled=True, minor_zoom_enabled=False,
                       random_zoom_enabled=False, strong_zoom_enabled=False,
+                      copyright_free_enabled=False,
                       progress_callback=None):
-        """Process entire video file with enhancements, preserving original audio."""
+        """Process entire video file with enhancements, preserving original audio.
+
+        When copyright_free_enabled is True, speed is changed to 1.05x via ffmpeg
+        after frame processing.
+        """
         self.cancel_flag = False
         # Reset zoom states for each new video
         if hasattr(self, '_random_zoom_state'):
@@ -319,7 +368,7 @@ class VideoEnhancer:
                 # Enhance frame
                 enhanced = self.enhance_frame(frame, hdr_enabled, color_enabled,
                                               minor_zoom_enabled, random_zoom_enabled,
-                                              strong_zoom_enabled,
+                                              strong_zoom_enabled, copyright_free_enabled,
                                               frame_index=processed, fps=fps)
                 out.write(enhanced)
 
@@ -368,6 +417,46 @@ class VideoEnhancer:
                 os.remove(output_path)
             os.rename(temp_video_path, output_path)
 
+        # Apply 1.05x speed change for copyright-free edit
+        if copyright_free_enabled and os.path.exists(output_path):
+            try:
+                ffmpeg_path = self._get_ffmpeg_path()
+                temp_speed_fd, temp_speed_path = tempfile.mkstemp(suffix=".mp4",
+                                                                   dir=os.path.dirname(output_path) or ".")
+                os.close(temp_speed_fd)
+                cmd = [
+                    ffmpeg_path, "-y",
+                    "-i", output_path,
+                    "-filter_complex",
+                    "[0:v]setpts=0.9524*PTS[v];[0:a]atempo=1.05[a]",
+                    "-map", "[v]", "-map", "[a]",
+                    "-c:v", "libx264", "-preset", "fast",
+                    "-c:a", "aac",
+                    temp_speed_path
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if result.returncode == 0:
+                    os.replace(temp_speed_path, output_path)
+                else:
+                    # If speed change fails (e.g. no audio), try video only
+                    cmd_no_audio = [
+                        ffmpeg_path, "-y",
+                        "-i", output_path,
+                        "-filter:v", "setpts=0.9524*PTS",
+                        "-an",
+                        "-c:v", "libx264", "-preset", "fast",
+                        temp_speed_path
+                    ]
+                    result2 = subprocess.run(cmd_no_audio, capture_output=True, text=True, timeout=600)
+                    if result2.returncode == 0:
+                        os.replace(temp_speed_path, output_path)
+                    else:
+                        if os.path.exists(temp_speed_path):
+                            os.remove(temp_speed_path)
+            except Exception:
+                if 'temp_speed_path' in locals() and os.path.exists(temp_speed_path):
+                    os.remove(temp_speed_path)
+
         # Final progress update
         if progress_callback:
             progress_callback(total_frames, total_frames, 0)
@@ -385,15 +474,18 @@ class VideoEnhancerGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Video Enhancer - Super HDR & Color Enhancement | made by @codex_here")
-        self.root.geometry("700x750")
+        self.root.geometry("700x900")
         self.root.resizable(True, True)
-        self.root.minsize(700, 750)
+        self.root.minsize(700, 900)
         self.root.configure(bg="#1a1a2e")
 
         self.enhancer = VideoEnhancer()
         self.input_path = tk.StringVar()
         self.output_path = tk.StringVar()
+        self.yt_url = tk.StringVar()
+        self.yt_format = tk.StringVar(value="16:9")
         self.processing = False
+        self.downloading = False
 
         self._setup_styles()
         self._create_widgets()
@@ -469,6 +561,58 @@ class VideoEnhancerGUI:
                              style='Status.TLabel')
         subtitle.pack(pady=(0, 15))
 
+        # YouTube Download Section
+        yt_frame = ttk.Frame(main_frame, style='Card.TFrame')
+        yt_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
+
+        ttk.Label(yt_frame, text="YouTube Download:",
+                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 2))
+
+        yt_url_row = ttk.Frame(yt_frame, style='Card.TFrame')
+        yt_url_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        self.yt_url_entry = tk.Entry(yt_url_row, textvariable=self.yt_url,
+                                     font=('Helvetica', 9),
+                                     bg='#0f3460', fg='#ffffff',
+                                     insertbackground='#ffffff',
+                                     relief='flat')
+        self.yt_url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+        self.yt_url_entry.insert(0, "")
+        self.yt_url_entry.config(fg='#a0a0a0')
+
+        yt_options_row = ttk.Frame(yt_frame, style='Card.TFrame')
+        yt_options_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        yt_format_16_9 = tk.Radiobutton(yt_options_row, text="16:9 (Landscape)",
+                                        variable=self.yt_format, value="16:9",
+                                        bg='#16213e', fg='#ffffff',
+                                        selectcolor='#0f3460',
+                                        activebackground='#16213e',
+                                        activeforeground='#ffffff',
+                                        font=('Helvetica', 10))
+        yt_format_16_9.pack(side=tk.LEFT, padx=(0, 20))
+
+        yt_format_9_16 = tk.Radiobutton(yt_options_row, text="Short (9:16)",
+                                        variable=self.yt_format, value="9:16",
+                                        bg='#16213e', fg='#ffffff',
+                                        selectcolor='#0f3460',
+                                        activebackground='#16213e',
+                                        activeforeground='#ffffff',
+                                        font=('Helvetica', 10))
+        yt_format_9_16.pack(side=tk.LEFT)
+
+        yt_btn_row = ttk.Frame(yt_frame, style='Card.TFrame')
+        yt_btn_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        self.yt_download_btn = ttk.Button(yt_btn_row, text="Download",
+                                          style='Custom.TButton',
+                                          command=self._download_youtube)
+        self.yt_download_btn.pack(side=tk.LEFT)
+
+        self.yt_status_label = ttk.Label(yt_btn_row, text="",
+                                         style='Info.TLabel')
+        self.yt_status_label.pack(side=tk.LEFT, padx=(15, 0))
+
         # Input File Section
         input_frame = ttk.Frame(main_frame, style='Card.TFrame')
         input_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
@@ -525,6 +669,7 @@ class VideoEnhancerGUI:
         self.minor_zoom_var = tk.BooleanVar(value=False)
         self.random_zoom_var = tk.BooleanVar(value=False)
         self.strong_zoom_var = tk.BooleanVar(value=False)
+        self.copyright_free_var = tk.BooleanVar(value=False)
 
         checks_row = ttk.Frame(options_frame, style='Card.TFrame')
         checks_row.pack(fill=tk.X, padx=10, pady=(0, 4))
@@ -579,6 +724,18 @@ class VideoEnhancerGUI:
                                            activeforeground='#ffffff',
                                            font=('Helvetica', 10))
         strong_zoom_check.pack(side=tk.LEFT)
+
+        checks_row4 = ttk.Frame(options_frame, style='Card.TFrame')
+        checks_row4.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        copyright_free_check = tk.Checkbutton(checks_row4, text="Copyright Free Edit",
+                                              variable=self.copyright_free_var,
+                                              bg='#16213e', fg='#ffffff',
+                                              selectcolor='#0f3460',
+                                              activebackground='#16213e',
+                                              activeforeground='#ffffff',
+                                              font=('Helvetica', 10))
+        copyright_free_check.pack(side=tk.LEFT)
 
         # Info Dashboard
         dashboard_frame = ttk.Frame(main_frame, style='Card.TFrame')
@@ -704,6 +861,122 @@ class VideoEnhancerGUI:
         if path:
             self.output_path.set(path)
 
+    def _download_youtube(self):
+        """Start YouTube video download in a background thread."""
+        if self.downloading:
+            return
+
+        url = self.yt_url.get().strip()
+        if not url:
+            messagebox.showerror("Error", "Please paste a YouTube URL.")
+            return
+
+        if yt_dlp is None:
+            messagebox.showerror("Error",
+                                 "yt-dlp is not installed. Run: pip install yt-dlp")
+            return
+
+        # Ask user where to save the downloaded video
+        save_dir = filedialog.askdirectory(title="Select Download Folder")
+        if not save_dir:
+            return
+
+        self.downloading = True
+        self.yt_download_btn.config(state=tk.DISABLED)
+        self.yt_status_label.config(text="Downloading...")
+
+        thread = threading.Thread(target=self._download_youtube_thread,
+                                  args=(url, save_dir),
+                                  daemon=True)
+        thread.start()
+
+    def _download_youtube_thread(self, url, save_dir):
+        """Background thread for downloading YouTube video."""
+        try:
+            video_format = self.yt_format.get()
+            output_template = os.path.join(save_dir, '%(title)s.%(ext)s')
+
+            ydl_opts = {
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'outtmpl': output_template,
+                'merge_output_format': 'mp4',
+            }
+
+            # Download the video
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                # Ensure .mp4 extension
+                if not filename.endswith('.mp4'):
+                    base = os.path.splitext(filename)[0]
+                    filename = base + '.mp4'
+
+            # If Short (9:16) format selected, crop to 9:16 aspect ratio
+            if video_format == "9:16" and os.path.exists(filename):
+                self.root.after(0, lambda: self.yt_status_label.config(
+                    text="Cropping to 9:16..."))
+                cropped_path = self._crop_to_9_16(filename)
+                if cropped_path:
+                    filename = cropped_path
+
+            self.root.after(0, self._on_download_complete, filename)
+
+        except Exception as e:
+            self.root.after(0, self._on_download_error, str(e))
+
+    def _crop_to_9_16(self, video_path):
+        """Crop a video to 9:16 aspect ratio (center crop) using ffmpeg."""
+        try:
+            ffmpeg_path = self.enhancer._get_ffmpeg_path()
+            base, ext = os.path.splitext(video_path)
+            output_path = f"{base}_short{ext}"
+
+            # Use ffmpeg crop filter: crop to 9:16 from center
+            # crop=ih*9/16:ih (width = height * 9/16, height stays same)
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", video_path,
+                "-vf", "crop=ih*9/16:ih",
+                "-c:v", "libx264", "-preset", "fast",
+                "-c:a", "aac",
+                output_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                # Remove original and rename
+                os.remove(video_path)
+                os.rename(output_path, video_path)
+                return video_path
+            else:
+                # If crop fails, keep original
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                return video_path
+        except Exception:
+            return video_path
+
+    def _on_download_complete(self, filename):
+        """Called when YouTube download completes."""
+        self.downloading = False
+        self.yt_download_btn.config(state=tk.NORMAL)
+        self.yt_status_label.config(text="Download complete!")
+
+        # Auto-set the downloaded file as input
+        if filename and os.path.exists(filename):
+            self.input_path.set(filename)
+            self._update_file_info(filename)
+            base, ext = os.path.splitext(filename)
+            self.output_path.set(f"{base}_enhanced.mp4")
+
+        messagebox.showinfo("Success", f"Video downloaded:\n{filename}")
+
+    def _on_download_error(self, error_msg):
+        """Called when YouTube download fails."""
+        self.downloading = False
+        self.yt_download_btn.config(state=tk.NORMAL)
+        self.yt_status_label.config(text="Download failed")
+        messagebox.showerror("Download Error", f"Failed to download:\n{error_msg}")
+
     def _update_file_info(self, path):
         """Update dashboard with video file information."""
         try:
@@ -754,7 +1027,7 @@ class VideoEnhancerGUI:
 
         if not self.hdr_var.get() and not self.color_var.get() \
                 and not self.minor_zoom_var.get() and not self.random_zoom_var.get() \
-                and not self.strong_zoom_var.get():
+                and not self.strong_zoom_var.get() and not self.copyright_free_var.get():
             messagebox.showwarning("Warning",
                                    "Please enable at least one enhancement option.")
             return
@@ -780,6 +1053,7 @@ class VideoEnhancerGUI:
                 minor_zoom_enabled=self.minor_zoom_var.get(),
                 random_zoom_enabled=self.random_zoom_var.get(),
                 strong_zoom_enabled=self.strong_zoom_var.get(),
+                copyright_free_enabled=self.copyright_free_var.get(),
                 progress_callback=self._on_progress
             )
 
