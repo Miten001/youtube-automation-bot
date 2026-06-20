@@ -1427,10 +1427,14 @@ class VideoEnhancerGUI:
             video_format = self.yt_format.get()
             output_template = os.path.join(save_dir, '%(title)s.%(ext)s')
 
+            ffmpeg_path = self.enhancer._get_ffmpeg_path()
+            ffmpeg_dir = os.path.dirname(ffmpeg_path)
+
             ydl_opts = {
                 'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                 'outtmpl': output_template,
                 'merge_output_format': 'mp4',
+                'ffmpeg_location': ffmpeg_dir,
             }
 
             # Download the video
