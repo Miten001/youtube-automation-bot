@@ -546,42 +546,79 @@ class VideoEnhancerGUI:
                         thickness=25)
 
     def _create_widgets(self):
-        """Create all GUI widgets."""
-        main_frame = ttk.Frame(self.root, style='Dark.TFrame')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        """Create all GUI widgets with scrollable canvas."""
+        # Create a canvas with scrollbar for the entire content
+        container = ttk.Frame(self.root, style='Dark.TFrame')
+        container.pack(fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(container, bg='#1a1a2e', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL,
+                                  command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Scrollable inner frame
+        main_frame = ttk.Frame(self.canvas, style='Dark.TFrame')
+        self.canvas_window = self.canvas.create_window((0, 0), window=main_frame,
+                                                       anchor='nw')
+
+        # Update scroll region when frame size changes
+        def _on_frame_configure(event):
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            self.canvas.itemconfig(self.canvas_window, width=event.width)
+
+        main_frame.bind('<Configure>', _on_frame_configure)
+        self.canvas.bind('<Configure>', _on_canvas_configure)
+
+        # Mousewheel scrolling
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _on_mousewheel_linux(event):
+            if event.num == 4:
+                self.canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self.canvas.yview_scroll(1, "units")
+
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.canvas.bind_all("<Button-4>", _on_mousewheel_linux)
+        self.canvas.bind_all("<Button-5>", _on_mousewheel_linux)
 
         # Title
         title_label = ttk.Label(main_frame,
                                 text="Video Enhancer",
                                 style='Title.TLabel')
-        title_label.pack(pady=(0, 5))
+        title_label.pack(pady=(10, 3), padx=20)
 
         subtitle = ttk.Label(main_frame,
                              text="Super HDR + Color Enhancement",
                              style='Status.TLabel')
-        subtitle.pack(pady=(0, 15))
+        subtitle.pack(pady=(0, 10), padx=20)
 
-        # YouTube Download Section
+        # YouTube / Instagram Download Section
         yt_frame = ttk.Frame(main_frame, style='Card.TFrame')
-        yt_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
+        yt_frame.pack(fill=tk.X, pady=3, ipady=5, ipadx=10, padx=20)
 
-        ttk.Label(yt_frame, text="YouTube Download:",
-                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 2))
+        ttk.Label(yt_frame, text="YouTube / Instagram Download:",
+                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(5, 2))
 
         yt_url_row = ttk.Frame(yt_frame, style='Card.TFrame')
-        yt_url_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+        yt_url_row.pack(fill=tk.X, padx=10, pady=(0, 3))
 
         self.yt_url_entry = tk.Entry(yt_url_row, textvariable=self.yt_url,
                                      font=('Helvetica', 9),
-                                     bg='#0f3460', fg='#ffffff',
+                                     bg='#0f3460', fg='#a0a0a0',
                                      insertbackground='#ffffff',
                                      relief='flat')
-        self.yt_url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
-        self.yt_url_entry.insert(0, "")
-        self.yt_url_entry.config(fg='#a0a0a0')
+        self.yt_url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
+        self.yt_url_entry.insert(0, "Paste YouTube or Instagram URL here")
 
         yt_options_row = ttk.Frame(yt_frame, style='Card.TFrame')
-        yt_options_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+        yt_options_row.pack(fill=tk.X, padx=10, pady=(0, 3))
 
         yt_format_16_9 = tk.Radiobutton(yt_options_row, text="16:9 (Landscape)",
                                         variable=self.yt_format, value="16:9",
@@ -602,7 +639,7 @@ class VideoEnhancerGUI:
         yt_format_9_16.pack(side=tk.LEFT)
 
         yt_btn_row = ttk.Frame(yt_frame, style='Card.TFrame')
-        yt_btn_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        yt_btn_row.pack(fill=tk.X, padx=10, pady=(0, 5))
 
         self.yt_download_btn = ttk.Button(yt_btn_row, text="Download",
                                           style='Custom.TButton',
@@ -613,44 +650,44 @@ class VideoEnhancerGUI:
                                          style='Info.TLabel')
         self.yt_status_label.pack(side=tk.LEFT, padx=(15, 0))
 
-        # Input File Section
+        # Input File Section (compact)
         input_frame = ttk.Frame(main_frame, style='Card.TFrame')
-        input_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
+        input_frame.pack(fill=tk.X, pady=3, ipady=4, ipadx=10, padx=20)
 
         ttk.Label(input_frame, text="Input Video:",
-                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 2))
+                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(4, 2))
 
         input_row = ttk.Frame(input_frame, style='Card.TFrame')
-        input_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        input_row.pack(fill=tk.X, padx=10, pady=(0, 4))
 
         self.input_entry = tk.Entry(input_row, textvariable=self.input_path,
                                     font=('Helvetica', 9),
                                     bg='#0f3460', fg='#ffffff',
                                     insertbackground='#ffffff',
                                     relief='flat')
-        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
 
         browse_btn = ttk.Button(input_row, text="Browse",
                                 style='Custom.TButton',
                                 command=self._browse_input)
         browse_btn.pack(side=tk.RIGHT, padx=(10, 0))
 
-        # Output File Section
+        # Output File Section (compact)
         output_frame = ttk.Frame(main_frame, style='Card.TFrame')
-        output_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
+        output_frame.pack(fill=tk.X, pady=3, ipady=4, ipadx=10, padx=20)
 
         ttk.Label(output_frame, text="Output Video:",
-                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 2))
+                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(4, 2))
 
         output_row = ttk.Frame(output_frame, style='Card.TFrame')
-        output_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        output_row.pack(fill=tk.X, padx=10, pady=(0, 4))
 
         self.output_entry = tk.Entry(output_row, textvariable=self.output_path,
                                      font=('Helvetica', 9),
                                      bg='#0f3460', fg='#ffffff',
                                      insertbackground='#ffffff',
                                      relief='flat')
-        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
 
         browse_out_btn = ttk.Button(output_row, text="Browse",
                                     style='Custom.TButton',
@@ -659,10 +696,10 @@ class VideoEnhancerGUI:
 
         # Enhancement Options
         options_frame = ttk.Frame(main_frame, style='Card.TFrame')
-        options_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
+        options_frame.pack(fill=tk.X, pady=3, ipady=5, ipadx=10, padx=20)
 
         ttk.Label(options_frame, text="Enhancement Options:",
-                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 5))
+                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(5, 3))
 
         self.hdr_var = tk.BooleanVar(value=True)
         self.color_var = tk.BooleanVar(value=True)
@@ -672,7 +709,7 @@ class VideoEnhancerGUI:
         self.copyright_free_var = tk.BooleanVar(value=False)
 
         checks_row = ttk.Frame(options_frame, style='Card.TFrame')
-        checks_row.pack(fill=tk.X, padx=10, pady=(0, 4))
+        checks_row.pack(fill=tk.X, padx=10, pady=(0, 2))
 
         hdr_check = tk.Checkbutton(checks_row, text="Super HDR Enhancement",
                                    variable=self.hdr_var,
@@ -693,7 +730,7 @@ class VideoEnhancerGUI:
         color_check.pack(side=tk.LEFT)
 
         checks_row2 = ttk.Frame(options_frame, style='Card.TFrame')
-        checks_row2.pack(fill=tk.X, padx=10, pady=(0, 8))
+        checks_row2.pack(fill=tk.X, padx=10, pady=(0, 2))
 
         minor_zoom_check = tk.Checkbutton(checks_row2, text="Minor Zoom",
                                           variable=self.minor_zoom_var,
@@ -714,7 +751,7 @@ class VideoEnhancerGUI:
         random_zoom_check.pack(side=tk.LEFT)
 
         checks_row3 = ttk.Frame(options_frame, style='Card.TFrame')
-        checks_row3.pack(fill=tk.X, padx=10, pady=(0, 8))
+        checks_row3.pack(fill=tk.X, padx=10, pady=(0, 2))
 
         strong_zoom_check = tk.Checkbutton(checks_row3, text="Strong Zoom In/Out",
                                            variable=self.strong_zoom_var,
@@ -726,7 +763,7 @@ class VideoEnhancerGUI:
         strong_zoom_check.pack(side=tk.LEFT)
 
         checks_row4 = ttk.Frame(options_frame, style='Card.TFrame')
-        checks_row4.pack(fill=tk.X, padx=10, pady=(0, 8))
+        checks_row4.pack(fill=tk.X, padx=10, pady=(0, 5))
 
         copyright_free_check = tk.Checkbutton(checks_row4, text="Copyright Free Edit",
                                               variable=self.copyright_free_var,
@@ -739,13 +776,13 @@ class VideoEnhancerGUI:
 
         # Info Dashboard
         dashboard_frame = ttk.Frame(main_frame, style='Card.TFrame')
-        dashboard_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
+        dashboard_frame.pack(fill=tk.X, pady=3, ipady=5, ipadx=10, padx=20)
 
         ttk.Label(dashboard_frame, text="Dashboard:",
-                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 5))
+                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(5, 3))
 
         info_grid = ttk.Frame(dashboard_frame, style='Card.TFrame')
-        info_grid.pack(fill=tk.X, padx=10, pady=(0, 8))
+        info_grid.pack(fill=tk.X, padx=10, pady=(0, 5))
 
         # File size
         ttk.Label(info_grid, text="File Size:",
@@ -777,14 +814,14 @@ class VideoEnhancerGUI:
 
         # Progress Section
         progress_frame = ttk.Frame(main_frame, style='Card.TFrame')
-        progress_frame.pack(fill=tk.X, pady=5, ipady=8, ipadx=10)
+        progress_frame.pack(fill=tk.X, pady=3, ipady=5, ipadx=10, padx=20)
 
         ttk.Label(progress_frame, text="Progress:",
-                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(8, 5))
+                  style='Header.TLabel').pack(anchor=tk.W, padx=10, pady=(5, 3))
 
         # Progress bar row with Cancel and Enter buttons beside it
         progress_bar_row = ttk.Frame(progress_frame, style='Card.TFrame')
-        progress_bar_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+        progress_bar_row.pack(fill=tk.X, padx=10, pady=(0, 3))
 
         self.progress_bar = ttk.Progressbar(progress_bar_row,
                                             style='Green.Horizontal.TProgressbar',
@@ -811,7 +848,7 @@ class VideoEnhancerGUI:
         enter_label.pack(side=tk.LEFT, padx=(5, 0))
 
         progress_info = ttk.Frame(progress_frame, style='Card.TFrame')
-        progress_info.pack(fill=tk.X, padx=10, pady=(0, 8))
+        progress_info.pack(fill=tk.X, padx=10, pady=(0, 5))
 
         self.progress_label = ttk.Label(progress_info,
                                         text="Ready - Press Enter to Start",
@@ -827,7 +864,7 @@ class VideoEnhancerGUI:
         credit_label = tk.Label(main_frame, text="made by @codex_here",
                                 bg='#1a1a2e', fg='#00d4ff',
                                 font=('Helvetica', 8, 'italic'))
-        credit_label.pack(side=tk.BOTTOM, pady=(20, 0))
+        credit_label.pack(side=tk.BOTTOM, pady=(10, 10))
 
         # Bind Enter key to start processing
         self.root.bind('<Return>', lambda event: self._start_processing())
