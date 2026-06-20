@@ -22,14 +22,25 @@ class VideoEnhancer:
     def __init__(self):
         self.cancel_flag = False
 
+    def _get_skin_mask(self, frame):
+        """Detect skin-tone regions in the frame using HSV color range."""
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        # Skin tone HSV range: H=0-25, S=40-170, V=80-255
+        lower_skin = np.array([0, 40, 80], dtype=np.uint8)
+        upper_skin = np.array([25, 170, 255], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower_skin, upper_skin)
+        # Smooth the mask to avoid hard edges
+        mask = cv2.GaussianBlur(mask, (7, 7), 0)
+        return mask.astype(np.float32) / 255.0
+
     def enhance_frame_hdr(self, frame):
-        """Apply Super HDR enhancement to a single frame."""
+        """Apply Super HDR enhancement to a single frame with skin tone protection."""
         # Convert to float for processing
         img = frame.astype(np.float32) / 255.0
 
         # Tone mapping - expand dynamic range
         # Apply gamma correction for highlights and shadows separately
-        shadows = np.power(img, 0.5)  # Brighten shadows more aggressively
+        shadows = np.power(img, 0.55)  # Slightly less aggressive shadow brightening
         highlights = np.power(img, 1.3)  # Slightly less compression on highlights
 
         # Blend based on luminance
@@ -42,13 +53,13 @@ class VideoEnhancer:
         # Apply overall brightness boost (gamma correction < 1 = brighter)
         hdr_frame = np.power(hdr_frame, 0.85)
 
-        # Local contrast enhancement using CLAHE with stronger clip limit
+        # Local contrast enhancement using CLAHE with reduced clip limit
         hdr_uint8 = np.clip(hdr_frame * 255, 0, 255).astype(np.uint8)
         lab = cv2.cvtColor(hdr_uint8, cv2.COLOR_BGR2LAB)
         l_channel, a_channel, b_channel = cv2.split(lab)
 
-        # Apply CLAHE to L channel for local contrast (stronger effect)
-        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
+        # Apply CLAHE to L channel (reduced clipLimit to protect skin tones)
+        clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
         l_enhanced = clahe.apply(l_channel)
 
         # Additional brightness boost on L channel
@@ -57,19 +68,37 @@ class VideoEnhancer:
         lab_enhanced = cv2.merge([l_enhanced, a_channel, b_channel])
         hdr_result = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
 
+        # Protect skin tones: blend original frame back in skin regions
+        skin_mask = self._get_skin_mask(frame)
+        skin_mask_3ch = cv2.merge([skin_mask, skin_mask, skin_mask])
+        # In skin regions, blend 60% original + 40% enhanced to preserve skin tones
+        hdr_result = (skin_mask_3ch * (0.6 * frame + 0.4 * hdr_result) +
+                      (1 - skin_mask_3ch) * hdr_result).astype(np.uint8)
+
         return hdr_result
 
     def enhance_frame_color(self, frame):
-        """Apply color enhancement to a single frame."""
+        """Apply color enhancement to a single frame with skin tone protection."""
         # Convert to HSV for saturation and brightness boost
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
 
-        # Boost saturation by 45%
-        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.45, 0, 255)
+        # Create a mask for skin-tone hues (orange/red range H=0-25)
+        # Apply less saturation boost in skin-tone hue range
+        hue = hsv[:, :, 0]
+        skin_hue_mask = (hue <= 25).astype(np.float32)
 
-        # Stronger vibrance increase (boost less saturated colors more)
+        # Boost saturation: 45% for non-skin, 20% for skin hues
+        sat_boost_full = 1.45
+        sat_boost_skin = 1.20
+        sat_boost = sat_boost_full * (1 - skin_hue_mask) + sat_boost_skin * skin_hue_mask
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * sat_boost, 0, 255)
+
+        # Vibrance increase (boost less saturated colors more)
+        # Reduced for skin-tone hues
         saturation = hsv[:, :, 1] / 255.0
-        boost_factor = 1.0 + 0.4 * (1.0 - saturation)
+        vibrance_full = 1.0 + 0.4 * (1.0 - saturation)
+        vibrance_skin = 1.0 + 0.15 * (1.0 - saturation)
+        boost_factor = vibrance_full * (1 - skin_hue_mask) + vibrance_skin * skin_hue_mask
         hsv[:, :, 1] = np.clip(hsv[:, :, 1] * boost_factor, 0, 255)
 
         # Brightness boost via Value channel
@@ -135,8 +164,42 @@ class VideoEnhancer:
         zoomed = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
         return zoomed
 
+    def apply_strong_zoom(self, frame, frame_index, fps):
+        """Apply strong zoom in/out effect - more aggressive than random zoom."""
+        if not hasattr(self, '_strong_zoom_state'):
+            self._strong_zoom_state = {
+                'current_factor': 1.0,
+                'next_change_frame': 0
+            }
+
+        state = self._strong_zoom_state
+
+        # Check if it's time to pick a new strong zoom level
+        if frame_index >= state['next_change_frame']:
+            # Strong zoom factor between 1.0 and 1.2 (very noticeable)
+            state['current_factor'] = random.uniform(1.0, 1.2)
+            # Change more frequently: every 1-3 seconds
+            interval_seconds = random.uniform(1.0, 3.0)
+            state['next_change_frame'] = frame_index + int(interval_seconds * fps)
+
+        zoom_factor = state['current_factor']
+
+        if zoom_factor <= 1.001:
+            return frame
+
+        h, w = frame.shape[:2]
+        new_w = int(w / zoom_factor)
+        new_h = int(h / zoom_factor)
+        x_start = (w - new_w) // 2
+        y_start = (h - new_h) // 2
+
+        cropped = frame[y_start:y_start + new_h, x_start:x_start + new_w]
+        zoomed = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+        return zoomed
+
     def enhance_frame(self, frame, hdr_enabled=True, color_enabled=True,
                       minor_zoom_enabled=False, random_zoom_enabled=False,
+                      strong_zoom_enabled=False,
                       frame_index=0, fps=30.0):
         """Apply all enabled enhancements to a frame."""
         result = frame.copy()
@@ -152,6 +215,9 @@ class VideoEnhancer:
 
         if random_zoom_enabled:
             result = self.apply_random_zoom(result, frame_index, fps)
+
+        if strong_zoom_enabled:
+            result = self.apply_strong_zoom(result, frame_index, fps)
 
         return result
 
@@ -198,12 +264,15 @@ class VideoEnhancer:
 
     def process_video(self, input_path, output_path, hdr_enabled=True,
                       color_enabled=True, minor_zoom_enabled=False,
-                      random_zoom_enabled=False, progress_callback=None):
+                      random_zoom_enabled=False, strong_zoom_enabled=False,
+                      progress_callback=None):
         """Process entire video file with enhancements, preserving original audio."""
         self.cancel_flag = False
-        # Reset random zoom state for each new video
+        # Reset zoom states for each new video
         if hasattr(self, '_random_zoom_state'):
             del self._random_zoom_state
+        if hasattr(self, '_strong_zoom_state'):
+            del self._strong_zoom_state
 
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
@@ -250,6 +319,7 @@ class VideoEnhancer:
                 # Enhance frame
                 enhanced = self.enhance_frame(frame, hdr_enabled, color_enabled,
                                               minor_zoom_enabled, random_zoom_enabled,
+                                              strong_zoom_enabled,
                                               frame_index=processed, fps=fps)
                 out.write(enhanced)
 
@@ -454,6 +524,7 @@ class VideoEnhancerGUI:
         self.color_var = tk.BooleanVar(value=True)
         self.minor_zoom_var = tk.BooleanVar(value=False)
         self.random_zoom_var = tk.BooleanVar(value=False)
+        self.strong_zoom_var = tk.BooleanVar(value=False)
 
         checks_row = ttk.Frame(options_frame, style='Card.TFrame')
         checks_row.pack(fill=tk.X, padx=10, pady=(0, 4))
@@ -496,6 +567,18 @@ class VideoEnhancerGUI:
                                            activeforeground='#ffffff',
                                            font=('Helvetica', 10))
         random_zoom_check.pack(side=tk.LEFT)
+
+        checks_row3 = ttk.Frame(options_frame, style='Card.TFrame')
+        checks_row3.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        strong_zoom_check = tk.Checkbutton(checks_row3, text="Strong Zoom In/Out",
+                                           variable=self.strong_zoom_var,
+                                           bg='#16213e', fg='#ffffff',
+                                           selectcolor='#0f3460',
+                                           activebackground='#16213e',
+                                           activeforeground='#ffffff',
+                                           font=('Helvetica', 10))
+        strong_zoom_check.pack(side=tk.LEFT)
 
         # Info Dashboard
         dashboard_frame = ttk.Frame(main_frame, style='Card.TFrame')
@@ -670,7 +753,8 @@ class VideoEnhancerGUI:
             return
 
         if not self.hdr_var.get() and not self.color_var.get() \
-                and not self.minor_zoom_var.get() and not self.random_zoom_var.get():
+                and not self.minor_zoom_var.get() and not self.random_zoom_var.get() \
+                and not self.strong_zoom_var.get():
             messagebox.showwarning("Warning",
                                    "Please enable at least one enhancement option.")
             return
@@ -695,6 +779,7 @@ class VideoEnhancerGUI:
                 color_enabled=self.color_var.get(),
                 minor_zoom_enabled=self.minor_zoom_var.get(),
                 random_zoom_enabled=self.random_zoom_var.get(),
+                strong_zoom_enabled=self.strong_zoom_var.get(),
                 progress_callback=self._on_progress
             )
 
